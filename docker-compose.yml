@@ -1,0 +1,25 @@
+services:
+  backend:
+    build: .
+    env_file: .env            # DASHSCOPE_API_KEY, LLM_BASE_URL, LLM_MODEL (never baked into the image)
+    ports: ["8000:8000"]
+    volumes:
+      - charts:/app/backend/charts
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      retries: 5
+
+  frontend:
+    build: .
+    working_dir: /app
+    command: ["streamlit", "run", "frontend/app.py", "--server.address=0.0.0.0", "--server.port=8501", "--server.headless=true"]
+    environment:
+      API_URL: http://backend:8000
+    ports: ["8501:8501"]
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  charts:
