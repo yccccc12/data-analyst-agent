@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-A data-analyst agent that answers questions about a SQLite database and can render charts. The backend is FastAPI; the frontend is a Streamlit chat UI (`frontend/app.py`) that shows the agent's thinking steps and tool calls live; both run in Docker. The agent core is implemented and works end to end (`agent.py`, `tools.py`, and the SQL guard in `db.py`; the user wrote the first regex-based `validate_select`, which was later replaced by a SQLite authorizer at their request). Tests are in `backend/tests/` (SQL guard, tools, agent loop and its event stream with a scripted fake model from `conftest.py`, charts/results cache, API incl. SSE) and make no network calls; there is no linter, and no commits yet (the main branch is named `main`; the current branch is `master`).
+A data-analyst agent that answers questions about a SQLite database and can render charts. The backend is FastAPI; the frontend is a Streamlit chat UI (`frontend/app.py`) that shows the agent's thinking steps and tool calls live; both run in Docker. The agent core is implemented and works end to end (`agent.py`, `tools.py`, and the SQL guard in `db.py`; the user wrote the first regex-based `validate_select`, which was later replaced by a SQLite authorizer at their request). Tests are in `backend/tests/` (SQL guard, tools, agent loop and its event stream with a scripted fake model from `conftest.py`, charts/results cache, API incl. SSE) and make no network calls; there is no linter. The branch is `main`, pushed to GitHub (`origin`). `README.md` is the user-facing overview; keep it in step with this file.
 
 ## Commands
 
