@@ -4,14 +4,16 @@ Ask questions about a sales database in plain English and get answers and charts
 
 The agent loop is written by hand on the plain `openai` SDK (no LangChain or other agent frameworks). It talks to Alibaba Cloud DashScope (Qwen) through the Responses API.
 
-```
-Streamlit UI  ──SSE──▶  FastAPI  ──▶  agent loop  ◀──▶  LLM (Qwen via DashScope)
- (frontend/)           (main.py)     (agent.py)
-                                         │ tool calls
-                                         ▼
-                     list_tables · describe_table · run_sql · make_chart
-                                         │
-                          read-only SQLite (sales)   ·   PNG charts
+```mermaid
+flowchart LR
+    UI["Streamlit UI<br/>(frontend/app.py)"] -- "POST /chat/stream" --> API["FastAPI<br/>(main.py)"]
+    API -- "SSE events" --> UI
+    API --> AG["Agent loop<br/>(agent.py)"]
+    AG <-- "Responses API" --> LLM["Qwen via DashScope"]
+    AG -- "tool calls" --> T["tools.py"]
+    T --> DB[("SQLite<br/>read-only")]
+    T --> CH["Charts<br/>(PNG files)"]
+    API -. "serves /charts" .-> CH
 ```
 
 ## Features
@@ -102,6 +104,21 @@ curl -N -X POST localhost:8000/chat/stream -H "content-type: application/json" `
 ```
 
 ## How it works
+
+```mermaid
+flowchart TD
+    A([User question]) --> B["Trim old turns<br/>(compact_history)"]
+    B --> C["Call the model with the history and tool schemas"]
+    C --> D{"Tool calls<br/>requested?"}
+    D -- yes --> E["Run each tool<br/>(tools.execute_tool)"]
+    E --> F["Add the results to the history<br/>and stream tool_call / tool_result events"]
+    F --> G{"Iteration limit<br/>reached?"}
+    G -- no --> C
+    G -- yes --> H(["Answer: could not finish"])
+    D -- no --> I{"Usable answer?"}
+    I -- yes --> J(["Stream the answer event"])
+    I -- no --> K["Roll the turn back<br/>and stream an error event"]
+```
 
 1. `main.py` keeps one history list per `session_id` (in memory) and calls `agent.run_stream`.
 2. `agent.py` loops: call the model, add everything it produced to the history, run each requested tool, send the results back, and stop when the model answers without a tool call (at most `MAX_ITERATIONS` rounds). Each step is yielded as an event.
