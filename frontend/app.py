@@ -2,6 +2,7 @@
 Needs the API running (cd backend; uvicorn app.main:app --reload)."""
 import json
 import os
+import time
 import uuid
 
 import pandas as pd
@@ -9,6 +10,9 @@ import requests
 import streamlit as st
 
 API = os.environ.get("API_URL", "http://127.0.0.1:8000")
+STARTERS = ["Total sales by region", "Monthly profit in 2016 as a line chart", "Top 5 products by profit"]
+THINKING_MAX_CHARS = 400   # the model's scratch work can run long; the UI shows only the start
+TABLE_MAX_HEIGHT = 320     # px; taller results scroll inside the table instead of stretching the page
 
 st.set_page_config(page_title="Data Analyst Agent", page_icon="📊", layout="centered")
 st.markdown(
@@ -20,37 +24,77 @@ st.markdown(
 
 if "session_id" not in st.session_state:
     st.session_state.session_id = uuid.uuid4().hex[:8]
-    st.session_state.messages = []  # {"role", "content", "steps", "chart_urls"}
+    # {"role", "content", "steps", "chart_urls", "label", "error"}; "label" and "error" are assistant-only
+    st.session_state.messages = []
+
+
+def ask(text: str) -> None:
+    """Button callback: queue a question; it is picked up below like a typed one."""
+    st.session_state.pending = text
+
+
+def starter_buttons(where: str) -> None:
+    for i, text in enumerate(STARTERS):
+        st.button(text, key=f"{where}-{i}", on_click=ask, args=(text,), width="stretch")
+
 
 with st.sidebar:
     st.title("📊 Data Analyst")
     st.caption("Ask questions about the Superstore sales data (2014–2017).")
-    st.caption(f"Session: `{st.session_state.session_id}`")
-    if st.button("New conversation", use_container_width=True):
+    if st.button("New conversation", width="stretch", help=f"Session {st.session_state.session_id}"):
         try:
             requests.delete(f"{API}/chat/{st.session_state.session_id}", timeout=5)
         except requests.RequestException:
             pass
         st.session_state.clear()
         st.rerun()
-    st.markdown("**Try:**\n- Total sales by region\n- Monthly profit in 2016 as a line chart\n- Top 5 products by profit")
+    if st.session_state.messages:  # before the first question the examples are in the main area
+        st.markdown("**Try:**")
+        starter_buttons("side")
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def fetch_chart(url: str) -> bytes:
+    """Fetch the PNG server-side, so the browser never needs to reach the API address.
+    Cached: Streamlit reruns the whole script on every message, and chart files never change."""
+    r = requests.get(f"{API}{url}", timeout=10)
+    r.raise_for_status()
+    return r.content
 
 
 def show_chart(url: str) -> None:
-    """Fetch the PNG server-side, so the browser never needs to reach the API address."""
     try:
-        st.image(requests.get(f"{API}{url}", timeout=10).content)
+        data = fetch_chart(url)
     except requests.RequestException:
         st.caption(f"(could not load chart {url})")
+        return
+    st.image(data, width="stretch")
+    st.download_button("Download chart", data, file_name=url.rsplit("/", 1)[-1], mime="image/png",
+                       key=f"download-{url}", on_click="ignore", type="tertiary",
+                       icon=":material/download:")
+
+
+def show_table(df: pd.DataFrame) -> None:
+    """A dataframe with a capped height and thousands separators on float columns."""
+    floats = df.select_dtypes("float").columns
+    st.dataframe(df, hide_index=True, height=min(35 * (len(df) + 1) + 3, TABLE_MAX_HEIGHT),
+                 column_config={c: st.column_config.NumberColumn(format="localized") for c in floats})
 
 
 def plural(n: int) -> str:
     return f"{n} tool call{'s' if n != 1 else ''}"
 
 
+def step_label(steps: list[dict], seconds: float, failed: bool = False) -> str:
+    return f"{'Failed after' if failed else 'Done in'} {seconds:.0f}s · {plural(sum(s['type'] == 'tool_call' for s in steps))}"
+
+
 def render_thinking(text: str) -> None:
     """Muted blockquote. (Wrapping in _..._ breaks as soon as the text has a blank line.)"""
-    st.markdown("\n".join(f"> {line}" for line in text.strip().splitlines()))
+    text = text.strip()
+    if len(text) > THINKING_MAX_CHARS:
+        text = text[:THINKING_MAX_CHARS].rstrip() + "…"
+    st.markdown("\n".join(f"> {line}" for line in text.splitlines()))
 
 
 def render_tool_call(step: dict) -> None:
@@ -78,10 +122,10 @@ def render_tool_result(step: dict) -> None:
         more = f", showing the first {shown}" if data["row_count"] > shown else ""
         cut = " (hit the row limit)" if data.get("truncated") else ""
         st.caption(f"✅ {data['row_count']} rows{more}{cut}  ·  `{data['result_id']}`")
-        st.dataframe(pd.DataFrame(data["rows"], columns=data["columns"]), hide_index=True)
-    elif "sample_rows" in data:  # describe_table
-        st.caption(f"✅ Table `{data['table']}`: {len(data['columns'])} columns")
-        st.dataframe(pd.DataFrame(data["columns"]), hide_index=True)
+        show_table(pd.DataFrame(data["rows"], columns=data["columns"]))
+    elif "sample_rows" in data:  # describe_table: routine, so one line instead of a table
+        names = ", ".join(f"`{c['name']}`" for c in data["columns"])
+        st.caption(f"✅ Table `{data['table']}`: {len(data['columns'])} columns — {names}")
     elif "tables" in data:  # list_tables
         st.caption("✅ Tables: " + ", ".join(f"`{t}`" for t in data["tables"]))
     elif "chart_url" in data:  # make_chart
@@ -96,15 +140,23 @@ def render_step(step: dict) -> None:
      "tool_result": render_tool_result}[step["type"]](step)
 
 
-def render_assistant(msg: dict) -> None:
-    if msg["steps"]:
-        calls = sum(s["type"] == "tool_call" for s in msg["steps"])
-        with st.expander(f"Thinking and tools ({plural(calls)})"):
-            for s in msg["steps"]:
-                render_step(s)
-    st.markdown(msg["content"])
+def render_outcome(msg: dict) -> None:
+    """What the user came for: charts first (the answer text can run long), then the text or the error."""
     for url in msg["chart_urls"]:
         show_chart(url)
+    if msg.get("error"):
+        st.error(msg["error"])
+        st.caption("This turn was not completed. You can send the question again.")
+    else:
+        st.markdown(msg["content"])
+
+
+def render_assistant(msg: dict) -> None:
+    if msg["steps"]:
+        with st.expander(msg["label"]):
+            for s in msg["steps"]:
+                render_step(s)
+    render_outcome(msg)
 
 
 def stream_events(message: str):
@@ -118,6 +170,15 @@ def stream_events(message: str):
                 yield json.loads(line[6:])
 
 
+# st.chat_input is pinned to the bottom wherever it is called; calling it first lets the
+# empty-state block below disappear as soon as a question (typed or from a button) arrives.
+prompt = st.chat_input("Ask about the data…") or st.session_state.pop("pending", None)
+
+if not st.session_state.messages and not prompt:
+    st.markdown("### What would you like to know?")
+    st.caption("Superstore sales, 2014–2017 · 9,994 order lines. Pick an example or type your own question.")
+    starter_buttons("main")
+
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
         if m["role"] == "assistant":
@@ -125,13 +186,14 @@ for m in st.session_state.messages:
         else:
             st.markdown(m["content"])
 
-if prompt := st.chat_input("Ask about the data…"):
-    st.session_state.messages.append({"role": "user", "content": prompt, "steps": [], "chart_urls": []})
+if prompt:
+    st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
         steps, answer, charts, failed = [], "", [], None
+        started = time.monotonic()
         status = st.status("Working…", expanded=True)
         try:
             with status:
@@ -146,14 +208,10 @@ if prompt := st.chat_input("Ask about the data…"):
         except requests.RequestException as e:
             failed = f"Cannot reach the API at {API}: {e}"
 
-        calls = sum(s["type"] == "tool_call" for s in steps)
-        if failed:
-            status.update(label="Failed", state="error", expanded=False)
-            st.error(failed)
-        else:
-            status.update(label=f"Done ({plural(calls)})", state="complete", expanded=False)
-            st.markdown(answer)
-            for url in charts:
-                show_chart(url)
-            st.session_state.messages.append(
-                {"role": "assistant", "content": answer, "steps": steps, "chart_urls": charts})
+        label = step_label(steps, time.monotonic() - started, failed=bool(failed))
+        status.update(label=label, state="error" if failed else "complete", expanded=False)
+        msg = {"role": "assistant", "content": answer, "steps": steps, "chart_urls": charts,
+               "label": label, "error": failed}
+        render_outcome(msg)
+        # Kept even when it failed, so the error survives the next rerun instead of vanishing.
+        st.session_state.messages.append(msg)

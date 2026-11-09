@@ -1,0 +1,6 @@
+# Read from the directory `streamlit run` is started in (the repo root, /app in Docker).
+[client]
+toolbarMode = "minimal"   # hide the Deploy button and the dev menu
+
+[theme]
+primaryColor = "#2f7de1"  # input focus ring, buttons; the default is Streamlit's red

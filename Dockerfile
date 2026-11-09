@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend ./backend
 COPY frontend ./frontend
+COPY .streamlit ./.streamlit
 COPY data ./data
 
 # Build backend/sample.db from the CSV (the .db is gitignored, so it is not in the repo).
