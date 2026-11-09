@@ -4,3 +4,4 @@ __pycache__/
 backend/charts/
 *.db
 .claude/settings.local.json
+backend/evals/results/

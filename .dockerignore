@@ -6,3 +6,4 @@
 backend/charts/
 backend/tests/
 .claude/
+backend/evals/
