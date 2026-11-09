@@ -6,9 +6,17 @@ import matplotlib
 matplotlib.use("Agg")  # headless backend, must be set before importing pyplot
 import matplotlib.pyplot as plt  # noqa: E402
 
+from matplotlib.ticker import FuncFormatter  # noqa: E402
+
 from . import config  # noqa: E402
 
 CHART_TYPES = ("bar", "line", "pie", "scatter", "hist")
+_THOUSANDS = FuncFormatter(lambda v, _: f"{v:,.10g}")  # 18000 -> 18,000; 0.5 stays 0.5
+
+
+def _label(column: str) -> str:
+    """total_profit -> Total profit"""
+    return column.replace("_", " ").capitalize()
 
 
 def _numbers(values: list, column: str) -> list[float]:
@@ -63,8 +71,17 @@ def render_chart(columns: list[str], rows: list[list], chart_type: str,
         elif chart_type == "hist":
             ax.hist(xs, bins=20)
         if chart_type != "pie":
-            ax.set_xlabel(x)
-            ax.set_ylabel(y if y else "count")
+            ax.set_xlabel(_label(x))
+            ax.set_ylabel(_label(y) if y else "Count")
+            ax.yaxis.set_major_formatter(_THOUSANDS)
+            if chart_type in ("scatter", "hist"):
+                ax.xaxis.set_major_formatter(_THOUSANDS)
+            ax.spines[["top", "right"]].set_visible(False)
+            ax.grid(axis="y", alpha=0.3)
+            ax.set_axisbelow(True)
+            if chart_type in ("bar", "line"):
+                for tick in ax.get_xticklabels():
+                    tick.set_ha("right")  # rotated labels end under their tick, not centred on it
         ax.set_title(title)
         fig.tight_layout()
         name = f"{uuid.uuid4().hex[:12]}.png"
