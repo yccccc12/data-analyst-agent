@@ -17,6 +17,7 @@ python backend/app/scripts/load_csv.py          # (re)build backend/sample.db fr
 cd backend; uvicorn app.main:app --reload       # run the API; run from backend/ so `app` imports
 cd backend; python -m app.agent ["question"]    # chat with the agent in the terminal (live LLM calls)
 cd backend; python -m pytest                    # tests (pip install -r requirements-dev.txt); a single test: pytest -k name
+cd backend; python -m evals.run [--repeat N] [--only ID...] [--tag T] [--quiet]   # eval set against the LIVE agent (LLM calls, slow); results in backend/evals/results/
 streamlit run frontend/app.py                   # the UI (from the repo root); needs the API running; API_URL env var, default http://127.0.0.1:8000
 docker compose up --build                       # API on :8000 + UI on :8501; reads .env, builds sample.db into the image
 ```
@@ -24,6 +25,10 @@ docker compose up --build                       # API on :8000 + UI on :8501; re
 Endpoints: `GET /health`, `POST /chat {session_id, message}` → `{answer, chart_urls}`, `POST /chat/stream` (same body; Server-Sent Events, see Architecture), `DELETE /chat/{session_id}`, static charts at `/charts/<file>.png`.
 
 Settings live in a root-level `.env` (gitignored): `DASHSCOPE_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` are required (checked by `config.require_llm_config()` on first LLM call, not at import). Optional: `DB_PATH` (relative paths resolve against `backend/`), `LLM_ENABLE_THINKING`, `LLM_TIMEOUT_S`.
+
+## Evals
+
+`backend/evals/` is separate from `tests/` because it makes live LLM calls. `cases.json` is the eval set (format documented in its `_about` / `_check_types` keys): each case has `turns` and `checks`, and checks carry their own gold SQL, run against `sample.db`, so no expected values are hard-coded. `checks.py` has the grading functions (`number` parsing handles `$`, commas, `81.8K`, and ignores sign), `run.py` runs each case from an empty history via `agent.run_stream`, records tool calls, and reports pass counts per case/tag. Cases with `"db": "poisoned"` run against a copy of the database whose text columns carry injected instructions (`poison.py`, numbers unchanged, `sample.db` never written); every run also hashes the DB file before and after (`db_unchanged` check). Tags: `injection` (direct + indirect), `scope` (off-topic handling). `tests/test_evals.py` covers the harness itself with the fake model (no network).
 
 ## Rules
 
@@ -50,6 +55,6 @@ Request path: `main.py` (`POST /chat` and `POST /chat/stream`, per-session histo
 - **Result cache:** `run_sql` stores the full result in `results.py` and returns only a `PREVIEW_ROWS` preview plus a `result_id`; `make_chart` takes that `result_id`, so large data never enters the model's context. The cache is process-wide and in memory.
 - **Charts:** `charts.py` renders with matplotlib's `Agg` backend into `backend/charts/` (gitignored, created by `config.py`) and `main.py` serves it at `/charts`.
 - **Event stream (`POST /chat/stream`):** SSE, one JSON object per `data:` line. Events: `thinking {text}` (non-empty `reasoning` summaries; Qwen returns them), `tool_call {id, name, arguments}`, `tool_result {id, ok, output, chart_url}`, then `answer {text, chart_urls}` last, or `error {message}` if the generator raised (`main.py` converts exceptions to this event and logs the request with the `logging` module). The contract is in the `main.py` docstring. `main.py` uses `agent.run_stream` and falls back to `stub_stream.run_stream` (fake events, no LLM) only if it is missing.
-- **Frontend (`frontend/app.py`):** Streamlit; reads the SSE stream with `requests`, renders thinking/tool calls inside a live `st.status` that collapses to an expander per message, and fetches chart PNGs server-side (`show_chart`) so the browser never needs to resolve the API's address (in Docker it is `http://backend:8000`).
+- **Frontend (`frontend/app.py`):** Streamlit; reads the SSE stream with `requests`, renders thinking/tool calls inside a live `st.status` that collapses to an expander per message, and fetches chart PNGs server-side (`fetch_chart`, cached with `st.cache_data`) so the browser never needs to resolve the API's address (in Docker it is `http://backend:8000`). Charts render above the answer text; failed turns are kept in the history as assistant messages with an `error`, so they survive reruns; the empty state has clickable example questions (queued via `session_state.pending`); `describe_table` results are one line and long thinking text is truncated. UI config (minimal toolbar, accent colour) is in `.streamlit/config.toml`, read from the directory `streamlit run` starts in (the repo root; the Dockerfile copies it).
 - **Docker:** one `Dockerfile` (python:3.12-slim) used by both services in `docker-compose.yml`; `sample.db` is built at image build time from `data/` (the `.db` is gitignored); the API key comes from `.env` via `env_file` and is never baked in; charts live in a named volume.
 - **Scope assumption:** single user. Sessions, the results cache and chart rendering are not made thread-safe or session-scoped, `SESSIONS` is never evicted, and chart PNGs are never deleted. Revisit before serving multiple users.

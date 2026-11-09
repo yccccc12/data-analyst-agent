@@ -148,6 +148,7 @@ backend/app/
   stub_stream.py  fake event source, used only if agent.run_stream is missing
   scripts/load_csv.py   build sample.db from the CSV
 backend/tests/    pytest suite with a scripted fake model
+backend/evals/    eval set (cases.json) and runner against the live agent
 frontend/app.py   Streamlit UI
 data/             the Superstore CSV
 ```
@@ -158,6 +159,19 @@ data/             the Superstore CSV
 pip install -r requirements-dev.txt
 cd backend; python -m pytest
 ```
+
+## Evals
+
+`backend/evals/cases.json` holds questions with checks graded against the real database (each check carries its own gold SQL). The runner calls the agent directly, so it makes live LLM calls and is slow and not free:
+
+```powershell
+cd backend
+python -m evals.run --repeat 3                   # every case, 3 runs each: shows flaky cases
+python -m evals.run --only profit-2016 --quiet   # one case; keep tool-call prints out of the console
+python -m evals.run --tag trap
+```
+
+Tags `injection` (prompt-injection attempts typed by the user or hidden in the data) and `scope` (off-topic questions) test safety and behaviour; injection cases against hidden instructions use a poisoned copy of the database that is built automatically. It prints pass counts per case and per tag, lists why each failure failed, and saves everything to `backend/evals/results/` (gitignored). To add a case, append to `cases.json`; the check types are described at the top of that file.
 
 ## Limitations
 
