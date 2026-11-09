@@ -9,7 +9,41 @@ from app import agent, config, main
 @pytest.fixture
 def client():
     main.SESSIONS.clear()
+    main._LAST_USED.clear()
     return TestClient(main.app)
+
+
+def test_idle_sessions_expire(monkeypatch):
+    main.SESSIONS.clear(); main._LAST_USED.clear()
+    monkeypatch.setattr(config, "SESSION_TTL_S", 60)
+    now = 1_000_000.0
+    monkeypatch.setattr(main.time, "time", lambda: now)
+    main.get_history("old").append("x")
+    monkeypatch.setattr(main.time, "time", lambda: now + 120)
+    main.get_history("new")
+    assert list(main.SESSIONS) == ["new"] and list(main._LAST_USED) == ["new"]
+
+
+def test_least_recently_used_session_is_evicted_over_the_cap(monkeypatch):
+    main.SESSIONS.clear(); main._LAST_USED.clear()
+    monkeypatch.setattr(config, "MAX_SESSIONS", 2)
+    main.get_history("a"); main.get_history("b")
+    main.get_history("a")          # a is now the most recently used
+    main.get_history("c")          # over the cap: b goes
+    assert list(main.SESSIONS) == ["a", "c"]
+
+
+def test_old_charts_are_deleted_and_new_ones_kept():
+    import os, time
+    from app import charts
+    old, new = config.CHARTS_DIR / "_old_test.png", config.CHARTS_DIR / "_new_test.png"
+    old.write_bytes(b"x"); new.write_bytes(b"x")
+    try:
+        os.utime(old, (time.time() - 7200, time.time() - 7200))
+        assert charts.cleanup_old_charts(3600) >= 1
+        assert not old.exists() and new.exists()
+    finally:
+        new.unlink(missing_ok=True); old.unlink(missing_ok=True)
 
 
 def test_health(client):

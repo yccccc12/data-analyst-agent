@@ -12,13 +12,14 @@ exists, app.stub_stream.run_stream is used.
 import json
 import logging
 import time
+from collections import OrderedDict
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import agent, config, stub_stream
+from . import agent, charts, config, stub_stream
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("api")
@@ -29,8 +30,41 @@ app = FastAPI(title="Data Analyst Agent")
 app.mount("/charts", StaticFiles(directory=config.CHARTS_DIR), name="charts")
 
 # Conversation memory: session_id -> list of Responses-API input items.
-# In-memory only, so it is lost on restart (fine for learning).
-SESSIONS: dict[str, list] = {}
+# In-memory only, so it is lost on restart (fine for learning). Ordered least to most
+# recently used; idle sessions expire after SESSION_TTL_S and at most MAX_SESSIONS are kept.
+SESSIONS: OrderedDict[str, list] = OrderedDict()
+_LAST_USED: dict[str, float] = {}
+_last_chart_cleanup = 0.0
+
+
+def _evict_sessions(now: float) -> None:
+    for sid in [s for s in SESSIONS if now - _LAST_USED.get(s, 0) > config.SESSION_TTL_S]:
+        SESSIONS.pop(sid)
+    while len(SESSIONS) > config.MAX_SESSIONS:
+        SESSIONS.popitem(last=False)  # least recently used
+    for sid in set(_LAST_USED) - set(SESSIONS):
+        del _LAST_USED[sid]
+
+
+def _housekeeping(now: float) -> None:
+    """Throttled: delete old chart PNGs."""
+    global _last_chart_cleanup
+    if now - _last_chart_cleanup >= config.CLEANUP_INTERVAL_S:
+        _last_chart_cleanup = now
+        removed = charts.cleanup_old_charts(config.CHART_TTL_S, now)
+        if removed:
+            log.info("removed %d old chart(s)", removed)
+
+
+def get_history(session_id: str) -> list:
+    """Return the session's history (creating it), mark it recently used, evict stale sessions."""
+    now = time.time()
+    history = SESSIONS.setdefault(session_id, [])
+    SESSIONS.move_to_end(session_id)
+    _LAST_USED[session_id] = now
+    _evict_sessions(now)
+    _housekeeping(now)
+    return history
 
 
 class ChatRequest(BaseModel):
@@ -50,7 +84,7 @@ def health():
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
-    history = SESSIONS.setdefault(req.session_id, [])
+    history = get_history(req.session_id)
     try:
         return agent.run(history, req.message)
     except NotImplementedError as e:
@@ -69,7 +103,7 @@ def _sse(event: dict) -> str:
 
 @app.post("/chat/stream")
 def chat_stream(req: ChatRequest):
-    history = SESSIONS.setdefault(req.session_id, [])
+    history = get_history(req.session_id)
 
     def generate():
         start, calls = time.time(), 0
@@ -92,4 +126,5 @@ def chat_stream(req: ChatRequest):
 @app.delete("/chat/{session_id}")
 def reset(session_id: str):
     SESSIONS.pop(session_id, None)
+    _LAST_USED.pop(session_id, None)
     return {"status": "reset"}

@@ -24,6 +24,12 @@ MAX_ROWS = 1000      # max rows any query may return
 PREVIEW_ROWS = 20    # rows of a result sent back to the model
 QUERY_TIMEOUT_S = 5
 
+# Housekeeping so a long-running server does not grow without limit
+SESSION_TTL_S = float(os.getenv("SESSION_TTL_S", "3600"))      # idle sessions are dropped after this
+MAX_SESSIONS = int(os.getenv("MAX_SESSIONS", "100"))           # least recently used go first
+CHART_TTL_S = float(os.getenv("CHART_TTL_S", "86400"))         # chart PNGs older than this are deleted
+CLEANUP_INTERVAL_S = 300                                       # how often chart cleanup may run
+
 
 def require_llm_config():
     """Fail early with a clear message instead of silently calling the wrong endpoint."""

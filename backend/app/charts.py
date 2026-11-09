@@ -1,4 +1,5 @@
 """Render a PNG chart from a cached query result with matplotlib."""
+import time
 import uuid
 
 import matplotlib
@@ -12,6 +13,20 @@ from . import config  # noqa: E402
 
 CHART_TYPES = ("bar", "line", "pie", "scatter", "hist")
 _THOUSANDS = FuncFormatter(lambda v, _: f"{v:,.10g}")  # 18000 -> 18,000; 0.5 stays 0.5
+
+
+def cleanup_old_charts(max_age_s: float, now: float | None = None) -> int:
+    """Delete chart PNGs not modified for max_age_s seconds. Returns how many were removed."""
+    cutoff = (time.time() if now is None else now) - max_age_s
+    removed = 0
+    for path in config.CHARTS_DIR.glob("*.png"):
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+                removed += 1
+        except OSError:  # already gone, or still being written/served
+            pass
+    return removed
 
 
 def _label(column: str) -> str:

@@ -75,6 +75,9 @@ Settings are read from a root-level `.env` (see `.env.example`).
 | `DB_PATH` | no | `sample.db` | SQLite file; relative paths resolve against `backend/` |
 | `LLM_ENABLE_THINKING` | no | `true` | Ask Qwen for reasoning summaries (shown as 💭 in the UI) |
 | `LLM_TIMEOUT_S` | no | `60` | Timeout per LLM call |
+| `SESSION_TTL_S` | no | `3600` | Idle chat sessions are dropped after this many seconds |
+| `MAX_SESSIONS` | no | `100` | Most sessions kept in memory; least recently used are dropped first |
+| `CHART_TTL_S` | no | `86400` | Chart PNGs older than this are deleted |
 
 The Streamlit app reads `API_URL` (default `http://127.0.0.1:8000`) to find the API.
 
@@ -178,7 +181,7 @@ Tags `injection` (prompt-injection attempts typed by the user or hidden in the d
 This is a learning project built for one user at a time:
 
 - Sessions and the results cache live in memory and are lost when the server restarts.
-- Chart rendering and the cache are not thread-safe, sessions are never evicted, and chart PNGs are never deleted.
+- Chart rendering and the cache are not thread-safe, and sessions and the results cache are not scoped per user. Idle sessions expire and old chart PNGs are deleted (see `SESSION_TTL_S`, `MAX_SESSIONS`, `CHART_TTL_S`), but the results cache is never trimmed.
 - There is no authentication.
 
 Revisit these before serving several users.
